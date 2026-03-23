@@ -33,6 +33,9 @@ info() {
 	echo -e "${BLU}ℹ $1${NC}"
 }
 
+# Variable to store the mounted data volume name
+MOUNTED_DATA_VOL=""
+
 # Function to mount data volume if not already mounted
 mount_data_volume() {
     info "Checking if data volume needs to be mounted..." >&2
@@ -40,6 +43,7 @@ mount_data_volume() {
     # Check if Data volume is already mounted
     if [ -d "/Volumes/Data" ]; then
         info "Data volume already mounted" >&2
+        MOUNTED_DATA_VOL="Data"
         return 0
     fi
     
@@ -60,12 +64,14 @@ mount_data_volume() {
         
         if diskutil mount "$data_volume_id" >/dev/null 2>&1; then
             success "Data volume mounted successfully" >&2
+            MOUNTED_DATA_VOL="Data"
             sleep 1
             return 0
         else
             warn "Standard mount failed, trying force mount..." >&2
             if diskutil mountDisk "$data_volume_id" >/dev/null 2>&1; then
                 success "Data volume mounted with mountDisk" >&2
+                MOUNTED_DATA_VOL="Data"
                 sleep 1
                 return 0
             fi
@@ -126,13 +132,19 @@ detect_volumes() {
 		done
 	fi
 	
-	# Strategy 4: Look for any volume with dslocal directory (indicates data volume)
+	# Strategy 4: Use the mounted data volume if we just mounted it
+	if [ -z "$data_vol" ] && [ -n "$MOUNTED_DATA_VOL" ] && [ -d "/Volumes/$MOUNTED_DATA_VOL" ]; then
+		data_vol="$MOUNTED_DATA_VOL"
+		info "Using mounted data volume: $data_vol" >&2
+	fi
+	
+	# Strategy 5: Look for any volume with dslocal directory (indicates data volume)
 	if [ -z "$data_vol" ]; then
 		for vol in /Volumes/*; do
 			if [ -d "$vol" ]; then
 				vol_name=$(basename "$vol")
-				# Skip system volume and recovery volumes
-				if [ "$vol_name" != "$system_vol" ] && [[ ! "$vol_name" =~ "Recovery" ]] && [[ ! "$vol_name" =~ "Preboot" ]] && [[ ! "$vol_name" =~ "VM" ]]; then
+				# Skip system volume, recovery volumes, and macOS Base System
+				if [ "$vol_name" != "$system_vol" ] && [[ ! "$vol_name" =~ "Recovery" ]] && [[ ! "$vol_name" =~ "Preboot" ]] && [[ ! "$vol_name" =~ "VM" ]] && [[ ! "$vol_name" =~ "Base System" ]]; then
 					# Check if this volume has the dslocal directory
 					if [ -d "$vol/private/var/db/dslocal" ]; then
 						data_vol="$vol_name"
