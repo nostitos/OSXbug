@@ -1,11 +1,11 @@
 #!/bin/bash
 
 # bypass-mdm-v2-FIXED.sh
-# Version: 2.0 - 2024-03-23
+# Version: 3.0 - 2024-03-23
 # Fixed version that mounts the Data volume in Recovery Mode
-# Enhanced with detailed debugging
+# Handles FileVault encrypted volumes
 
-VERSION="2.0"
+VERSION="3.0"
 
 # Define color codes
 RED='\033[1;31m'
@@ -71,7 +71,7 @@ show_system_state() {
 	echo ""
 }
 
-# Function to mount data volume if not already mounted
+# Function to unlock and mount data volume
 # Returns the mounted volume name via echo for capture
 mount_data_volume() {
     info "=== MOUNT DATA VOLUME STEP ==="
@@ -83,7 +83,7 @@ mount_data_volume() {
         return 0
     fi
     
-    debug "Data volume not found at /Volumes/Data, need to mount it"
+    debug "Data volume not found at /Volumes/Data, need to mount it" >&2
     
     # Find the data volume identifier from diskutil
     local data_volume_id=""
@@ -101,87 +101,133 @@ mount_data_volume() {
         debug "After searching all disks: data_volume_id='$data_volume_id'" >&2
     fi
     
-    if [ -n "$data_volume_id" ]; then
-        info "Found data volume identifier: $data_volume_id" >&2
-        info "Attempting to mount data volume..." >&2
+    if [ -z "$data_volume_id" ]; then
+        error_exit "Could not find 'Data' volume identifier in diskutil output"
+    fi
+    
+    info "Found data volume identifier: $data_volume_id" >&2
+    
+    # Check if volume is encrypted/locked
+    info "Checking if volume is encrypted..." >&2
+    local disk_info
+    disk_info=$(diskutil apfs list 2>&1 | grep -A 5 "$data_volume_id")
+    debug "Volume info:\n$disk_info" >&2
+    
+    # Check if locked
+    if diskutil apfs list | grep -A 10 "$data_volume_id" | grep -q "Locked.*Yes"; then
+        warn "Volume is encrypted and locked. FileVault password required." >&2
         
-        # Try method 1: standard mount
-        debug "Method 1: diskutil mount $data_volume_id" >&2
-        local mount_output
-        mount_output=$(diskutil mount "$data_volume_id" 2>&1)
-        debug "Mount output: $mount_output" >&2
+        # Try to unlock with user password
+        local unlock_success=0
+        local unlock_attempts=0
         
-        if echo "$mount_output" | grep -q "mounted"; then
-            success "Data volume mounted successfully (method 1)" >&2
-            sleep 1
+        while [ $unlock_success -eq 0 ] && [ $unlock_attempts -lt 3 ]; do
+            unlock_attempts=$((unlock_attempts + 1))
             
-            # Verify it actually mounted
-            if [ -d "/Volumes/Data" ]; then
-                success "Verified: /Volumes/Data exists" >&2
-                echo "Data"
-                return 0
+            if [ $unlock_attempts -eq 1 ]; then
+                read -s -p "Enter FileVault password for this Mac: " filevault_pass
             else
-                warn "Mount reported success but /Volumes/Data does not exist" >&2
+                read -s -p "Password incorrect. Try again: " filevault_pass
             fi
-        else
-            warn "Method 1 failed: $mount_output" >&2
-        fi
-        
-        # Try method 2: mountDisk
-        debug "Method 2: diskutil mountDisk $data_volume_id" >&2
-        mount_output=$(diskutil mountDisk "$data_volume_id" 2>&1)
-        debug "MountDisk output: $mount_output" >&2
-        
-        if echo "$mount_output" | grep -q "mounted"; then
-            success "Data volume mounted with mountDisk (method 2)" >&2
-            sleep 1
+            echo ""
             
-            if [ -d "/Volumes/Data" ]; then
-                success "Verified: /Volumes/Data exists" >&2
-                echo "Data"
-                return 0
-            fi
-        else
-            warn "Method 2 failed: $mount_output" >&2
-        fi
-        
-        # Try method 3: force mount with explicit mount point
-        debug "Method 3: Force mount to /Volumes/Data" >&2
-        mkdir -p /Volumes/Data 2>/dev/null
-        mount_output=$(diskutil mount -mountPoint /Volumes/Data "$data_volume_id" 2>&1)
-        debug "Force mount output: $mount_output" >&2
-        
-        if echo "$mount_output" | grep -q "mounted"; then
-            success "Data volume force mounted (method 3)" >&2
-            sleep 1
+            info "Attempting to unlock volume..." >&2
+            local unlock_output
+            unlock_output=$(diskutil apfs unlockVolume "$data_volume_id" -passphrase "$filevault_pass" 2>&1)
+            local unlock_exit=$?
             
-            if [ -d "/Volumes/Data" ]; then
-                success "Verified: /Volumes/Data exists" >&2
-                echo "Data"
-                return 0
-            fi
-        else
-            warn "Method 3 failed: $mount_output" >&2
-        fi
-        
-        # Method 4: Try using mount command directly
-        debug "Method 4: Direct mount command" >&2
-        local device_path="/dev/$data_volume_id"
-        if [ -e "$device_path" ]; then
-            debug "Device exists: $device_path" >&2
-            mount_output=$(mount -t apfs "$device_path" /Volumes/Data 2>&1)
-            if [ $? -eq 0 ]; then
-                success "Data volume mounted with direct mount (method 4)" >&2
-                echo "Data"
-                return 0
+            debug "Unlock output: $unlock_output" >&2
+            
+            if [ $unlock_exit -eq 0 ]; then
+                success "Volume unlocked successfully" >&2
+                unlock_success=1
             else
-                warn "Method 4 failed: $mount_output" >&2
+                warn "Unlock failed: $unlock_output" >&2
             fi
+        done
+        
+        if [ $unlock_success -eq 0 ]; then
+            error_exit "Failed to unlock volume after $unlock_attempts attempts. Cannot proceed."
+        fi
+    fi
+    
+    # Now try to mount the volume
+    info "Attempting to mount data volume..." >&2
+    
+    # Try method 1: standard mount
+    debug "Method 1: diskutil mount $data_volume_id" >&2
+    local mount_output
+    mount_output=$(diskutil mount "$data_volume_id" 2>&1)
+    debug "Mount output: $mount_output" >&2
+    
+    if echo "$mount_output" | grep -q "mounted"; then
+        success "Data volume mounted successfully (method 1)" >&2
+        sleep 1
+        
+        # Verify it actually mounted
+        if [ -d "/Volumes/Data" ]; then
+            success "Verified: /Volumes/Data exists" >&2
+            echo "Data"
+            return 0
         else
-            debug "Device does not exist: $device_path" >&2
+            warn "Mount reported success but /Volumes/Data does not exist" >&2
         fi
     else
-        error_exit "Could not find 'Data' volume identifier in diskutil output"
+        warn "Method 1 failed: $mount_output" >&2
+    fi
+    
+    # Try method 2: mountDisk
+    debug "Method 2: diskutil mountDisk $data_volume_id" >&2
+    mount_output=$(diskutil mountDisk "$data_volume_id" 2>&1)
+    debug "MountDisk output: $mount_output" >&2
+    
+    if echo "$mount_output" | grep -q "mounted"; then
+        success "Data volume mounted with mountDisk (method 2)" >&2
+        sleep 1
+        
+        if [ -d "/Volumes/Data" ]; then
+            success "Verified: /Volumes/Data exists" >&2
+            echo "Data"
+            return 0
+        fi
+    else
+        warn "Method 2 failed: $mount_output" >&2
+    fi
+    
+    # Try method 3: force mount with explicit mount point
+    debug "Method 3: Force mount to /Volumes/Data" >&2
+    mkdir -p /Volumes/Data 2>/dev/null
+    mount_output=$(diskutil mount -mountPoint /Volumes/Data "$data_volume_id" 2>&1)
+    debug "Force mount output: $mount_output" >&2
+    
+    if echo "$mount_output" | grep -q "mounted"; then
+        success "Data volume force mounted (method 3)" >&2
+        sleep 1
+        
+        if [ -d "/Volumes/Data" ]; then
+            success "Verified: /Volumes/Data exists" >&2
+            echo "Data"
+            return 0
+        fi
+    else
+        warn "Method 3 failed: $mount_output" >&2
+    fi
+    
+    # Method 4: Try using mount command directly
+    debug "Method 4: Direct mount command" >&2
+    local device_path="/dev/$data_volume_id"
+    if [ -e "$device_path" ]; then
+        debug "Device exists: $device_path" >&2
+        mount_output=$(mount -t apfs "$device_path" /Volumes/Data 2>&1)
+        if [ $? -eq 0 ]; then
+            success "Data volume mounted with direct mount (method 4)" >&2
+            echo "Data"
+            return 0
+        else
+            warn "Method 4 failed: $mount_output" >&2
+        fi
+    else
+        debug "Device does not exist: $device_path" >&2
     fi
     
     error_exit "All mount methods failed. Could not mount data volume."
