@@ -1,11 +1,11 @@
 #!/bin/bash
 
 # bypass-mdm-v2-FIXED.sh
-# Version: 3.0 - 2024-03-23
+# Version: 3.3 - 2024-03-23
 # Fixed version that mounts the Data volume in Recovery Mode
 # Handles FileVault encrypted volumes
 
-VERSION="3.0"
+VERSION="3.3"
 
 # Define color codes
 RED='\033[1;31m'
