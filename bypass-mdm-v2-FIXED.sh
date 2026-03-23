@@ -5,7 +5,7 @@
 # Fixed version that mounts the Data volume in Recovery Mode
 # Handles FileVault encrypted volumes
 
-VERSION="3.4"
+VERSION="3.5"
 
 # Define color codes
 RED='\033[1;31m'
@@ -24,7 +24,7 @@ error_exit() {
 
 # Warning function
 warn() {
-	echo -e "${YEL}WARNING: $1${NC}"
+	echo -e "${YEL}WARNING: $1${NC}" >&2
 }
 
 # Success function
@@ -39,7 +39,7 @@ info() {
 
 # Debug function
 debug() {
-	echo -e "${PUR}[DEBUG] $1${NC}"
+	echo -e "${PUR}[DEBUG] $1${NC}" >&2
 }
 
 # Show current system state
@@ -348,7 +348,6 @@ detect_volumes() {
 	fi
 
 	# Validate findings
-	echo ""
 	info "=== DETECTION RESULTS ==="
 	debug "system_vol='$system_vol'" >&2
 	debug "data_vol='$data_vol'" >&2
