@@ -1,7 +1,11 @@
 #!/bin/bash
 
 # bypass-mdm-v2-FIXED.sh
+# Version: 2.0 - 2024-03-23
 # Fixed version that mounts the Data volume in Recovery Mode
+# Enhanced with detailed debugging
+
+VERSION="2.0"
 
 # Define color codes
 RED='\033[1;31m'
@@ -33,10 +37,44 @@ info() {
 	echo -e "${BLU}ℹ $1${NC}"
 }
 
+# Debug function
+debug() {
+	echo -e "${PUR}[DEBUG] $1${NC}"
+}
+
+# Show current system state
+show_system_state() {
+	echo ""
+	echo -e "${CYAN}╔═══════════════════════════════════════════════╗${NC}"
+	echo -e "${CYAN}║  Debug Info - Version ${VERSION}                     ║${NC}"
+	echo -e "${CYAN}╚═══════════════════════════════════════════════╝${NC}"
+	echo ""
+	
+	info "Current mounted volumes:"
+	ls -la /Volumes/ 2>&1 | while read line; do
+		echo "    $line"
+	done
+	
+	echo ""
+	info "APFS Volumes from diskutil:"
+	diskutil list | grep "APFS Volume" | while read line; do
+		echo "    $line"
+	done
+	
+	echo ""
+	info "Checking for Data volume in diskutil:"
+	diskutil list | grep "APFS Volume" | grep "Data"
+	if [ $? -ne 0 ]; then
+		echo "    (No Data volume found in diskutil list)"
+	fi
+	
+	echo ""
+}
+
 # Function to mount data volume if not already mounted
 # Returns the mounted volume name via echo for capture
 mount_data_volume() {
-    info "Checking if data volume needs to be mounted..." >&2
+    info "=== MOUNT DATA VOLUME STEP ==="
     
     # Check if Data volume is already mounted
     if [ -d "/Volumes/Data" ]; then
@@ -45,48 +83,108 @@ mount_data_volume() {
         return 0
     fi
     
+    debug "Data volume not found at /Volumes/Data, need to mount it"
+    
     # Find the data volume identifier from diskutil
-    local data_volume_id
+    local data_volume_id=""
     
-    # Strategy 1: Look for "Data" APFS volume
-    data_volume_id=$(diskutil list | grep "APFS Volume" | grep -E "Data" | grep "disk3" | awk '{print $NF}' | head -1)
+    info "Searching for 'Data' volume in diskutil..." >&2
     
+    # Strategy 1: Look for "Data" APFS volume on disk3
+    data_volume_id=$(diskutil list | grep "APFS Volume" | grep "Data" | grep "disk3" | awk '{print $NF}' | head -1)
+    debug "After searching on disk3: data_volume_id='$data_volume_id'" >&2
+    
+    # Strategy 2: If not found, look for volume with Data in name (any disk)
     if [ -z "$data_volume_id" ]; then
-        data_volume_id=$(diskutil list | grep "APFS Volume" | grep -E "Data" | awk '{print $NF}' | head -1)
+        debug "Not found on disk3, searching all disks..." >&2
+        data_volume_id=$(diskutil list | grep "APFS Volume" | grep "Data" | awk '{print $NF}' | head -1)
+        debug "After searching all disks: data_volume_id='$data_volume_id'" >&2
     fi
     
     if [ -n "$data_volume_id" ]; then
         info "Found data volume identifier: $data_volume_id" >&2
-        info "Mounting data volume..." >&2
+        info "Attempting to mount data volume..." >&2
         
-        # Try mounting with different methods
-        if diskutil mount "$data_volume_id" 2>&1 | grep -q "mounted"; then
-            success "Data volume mounted successfully" >&2
+        # Try method 1: standard mount
+        debug "Method 1: diskutil mount $data_volume_id" >&2
+        local mount_output
+        mount_output=$(diskutil mount "$data_volume_id" 2>&1)
+        debug "Mount output: $mount_output" >&2
+        
+        if echo "$mount_output" | grep -q "mounted"; then
+            success "Data volume mounted successfully (method 1)" >&2
             sleep 1
-            echo "Data"
-            return 0
+            
+            # Verify it actually mounted
+            if [ -d "/Volumes/Data" ]; then
+                success "Verified: /Volumes/Data exists" >&2
+                echo "Data"
+                return 0
+            else
+                warn "Mount reported success but /Volumes/Data does not exist" >&2
+            fi
+        else
+            warn "Method 1 failed: $mount_output" >&2
         fi
         
-        warn "Standard mount failed, trying mountDisk..." >&2
-        if diskutil mountDisk "$data_volume_id" 2>&1 | grep -q "mounted"; then
-            success "Data volume mounted with mountDisk" >&2
+        # Try method 2: mountDisk
+        debug "Method 2: diskutil mountDisk $data_volume_id" >&2
+        mount_output=$(diskutil mountDisk "$data_volume_id" 2>&1)
+        debug "MountDisk output: $mount_output" >&2
+        
+        if echo "$mount_output" | grep -q "mounted"; then
+            success "Data volume mounted with mountDisk (method 2)" >&2
             sleep 1
-            echo "Data"
-            return 0
+            
+            if [ -d "/Volumes/Data" ]; then
+                success "Verified: /Volumes/Data exists" >&2
+                echo "Data"
+                return 0
+            fi
+        else
+            warn "Method 2 failed: $mount_output" >&2
         fi
         
-        # Last resort: try mounting with specific mount point
-        warn "Trying force mount..." >&2
-        if diskutil mount -mountPoint /Volumes/Data "$data_volume_id" 2>&1 | grep -q "mounted"; then
-            success "Data volume force mounted" >&2
+        # Try method 3: force mount with explicit mount point
+        debug "Method 3: Force mount to /Volumes/Data" >&2
+        mkdir -p /Volumes/Data 2>/dev/null
+        mount_output=$(diskutil mount -mountPoint /Volumes/Data "$data_volume_id" 2>&1)
+        debug "Force mount output: $mount_output" >&2
+        
+        if echo "$mount_output" | grep -q "mounted"; then
+            success "Data volume force mounted (method 3)" >&2
             sleep 1
-            echo "Data"
-            return 0
+            
+            if [ -d "/Volumes/Data" ]; then
+                success "Verified: /Volumes/Data exists" >&2
+                echo "Data"
+                return 0
+            fi
+        else
+            warn "Method 3 failed: $mount_output" >&2
         fi
+        
+        # Method 4: Try using mount command directly
+        debug "Method 4: Direct mount command" >&2
+        local device_path="/dev/$data_volume_id"
+        if [ -e "$device_path" ]; then
+            debug "Device exists: $device_path" >&2
+            mount_output=$(mount -t apfs "$device_path" /Volumes/Data 2>&1)
+            if [ $? -eq 0 ]; then
+                success "Data volume mounted with direct mount (method 4)" >&2
+                echo "Data"
+                return 0
+            else
+                warn "Method 4 failed: $mount_output" >&2
+            fi
+        else
+            debug "Device does not exist: $device_path" >&2
+        fi
+    else
+        error_exit "Could not find 'Data' volume identifier in diskutil output"
     fi
     
-    warn "Could not automatically mount data volume" >&2
-    return 1
+    error_exit "All mount methods failed. Could not mount data volume."
 }
 
 # Function to detect system volumes with multiple fallback strategies
@@ -95,25 +193,34 @@ detect_volumes() {
 	local system_vol=""
 	local data_vol="${1:-}"
 
-	info "Detecting system volumes..." >&2
+	info "=== DETECT VOLUMES STEP ==="
+	
+	# Debug: Show what was passed in
+	debug "Passed data_vol argument: '$data_vol'" >&2
 	
 	# Strategy 0: If data volume was already mounted and passed in, verify it
-	if [ -n "$data_vol" ] && [ -d "/Volumes/$data_vol/private/var/db/dslocal" ]; then
-		info "Using pre-mounted data volume: $data_vol" >&2
-		# Still need to find system volume
-	else
-		data_vol=""
+	if [ -n "$data_vol" ]; then
+		info "Checking if passed data volume '$data_vol' is valid..." >&2
+		if [ -d "/Volumes/$data_vol/private/var/db/dslocal" ]; then
+			success "Passed data volume '$data_vol' is valid (has dslocal)" >&2
+			# Still need to find system volume
+		else
+			warn "Passed data volume '$data_vol' does not have dslocal directory" >&2
+			data_vol=""
+		fi
 	fi
 	
 	# Strategy 1: Look for common macOS APFS volume patterns
+	info "Strategy 1: Looking for system volume..." >&2
 	for vol in /Volumes/*; do
 		if [ -d "$vol" ]; then
 			vol_name=$(basename "$vol")
+			debug "Checking volume: $vol_name" >&2
 
 			# Check if this looks like a system volume (not Data, not recovery)
 			if [[ ! "$vol_name" =~ "Data"$ ]] && [[ ! "$vol_name" =~ "Recovery" ]] && [ -d "$vol/System" ]; then
 				system_vol="$vol_name"
-				info "Found system volume: $system_vol" >&2
+				success "Found system volume: $system_vol" >&2
 				break
 			fi
 		fi
@@ -121,6 +228,7 @@ detect_volumes() {
 
 	# Strategy 2: If no system volume found, try looking for any volume with /System directory
 	if [ -z "$system_vol" ]; then
+		info "Strategy 2: Looking for any volume with /System directory..." >&2
 		for vol in /Volumes/*; do
 			if [ -d "$vol/System" ]; then
 				system_vol=$(basename "$vol")
@@ -131,42 +239,57 @@ detect_volumes() {
 	fi
 
 	# Strategy 3: Check for Data volume
-	if [ -d "/Volumes/Data" ]; then
-		data_vol="Data"
-		info "Found data volume: $data_vol" >&2
-	elif [ -n "$system_vol" ] && [ -d "/Volumes/$system_vol - Data" ]; then
-		data_vol="$system_vol - Data"
-		info "Found data volume: $data_vol" >&2
-	else
-		# Look for any volume ending with "Data"
-		for vol in /Volumes/*Data; do
-			if [ -d "$vol" ]; then
-				data_vol=$(basename "$vol")
-				warn "Found data volume: $data_vol" >&2
-				break
-			fi
-		done
+	if [ -z "$data_vol" ]; then
+		info "Strategy 3: Checking for Data volume..." >&2
+		if [ -d "/Volumes/Data" ]; then
+			data_vol="Data"
+			success "Found data volume: $data_vol" >&2
+		elif [ -n "$system_vol" ] && [ -d "/Volumes/$system_vol - Data" ]; then
+			data_vol="$system_vol - Data"
+			success "Found data volume: $data_vol" >&2
+		else
+			# Look for any volume ending with "Data"
+			for vol in /Volumes/*Data; do
+				if [ -d "$vol" ]; then
+					data_vol=$(basename "$vol")
+					warn "Found data volume: $data_vol" >&2
+					break
+				fi
+			done
+		fi
 	fi
 	
 	# Strategy 4: Look for any volume with dslocal directory (indicates data volume)
 	if [ -z "$data_vol" ]; then
+		info "Strategy 4: Looking for volume with dslocal directory..." >&2
 		for vol in /Volumes/*; do
 			if [ -d "$vol" ]; then
 				vol_name=$(basename "$vol")
+				debug "Checking volume '$vol_name' for dslocal..." >&2
+				
 				# Skip system volume, recovery volumes, and macOS Base System
 				if [ "$vol_name" != "$system_vol" ] && [[ ! "$vol_name" =~ "Recovery" ]] && [[ ! "$vol_name" =~ "Preboot" ]] && [[ ! "$vol_name" =~ "VM" ]] && [[ ! "$vol_name" =~ "Base System" ]]; then
 					# Check if this volume has the dslocal directory
 					if [ -d "$vol/private/var/db/dslocal" ]; then
 						data_vol="$vol_name"
-						info "Found data volume by dslocal presence: $data_vol" >&2
+						success "Found data volume by dslocal presence: $data_vol" >&2
 						break
+					else
+						debug "Volume '$vol_name' does not have /private/var/db/dslocal" >&2
 					fi
+				else
+					debug "Skipping volume '$vol_name' (filtered out)" >&2
 				fi
 			fi
 		done
 	fi
 
 	# Validate findings
+	echo ""
+	info "=== DETECTION RESULTS ==="
+	debug "system_vol='$system_vol'" >&2
+	debug "data_vol='$data_vol'" >&2
+	
 	if [ -z "$system_vol" ]; then
 		error_exit "Could not detect system volume. Please ensure you're running this in Recovery mode with a macOS installation present."
 	fi
@@ -178,11 +301,36 @@ detect_volumes() {
 	echo "$system_vol|$data_vol"
 }
 
+# Show initial debug info
+show_system_state
+
 # Mount data volume first and capture the result
+info "=== STARTING MOUNT PROCESS ==="
 mounted_data_vol=$(mount_data_volume)
+mount_exit_code=$?
+
+if [ $mount_exit_code -ne 0 ]; then
+	error_exit "Mount process failed with exit code $mount_exit_code"
+fi
+
+if [ -z "$mounted_data_vol" ]; then
+	error_exit "Mount process returned empty result"
+fi
+
+success "Mount process returned: '$mounted_data_vol'"
+
+# Verify mount worked
+if [ ! -d "/Volumes/$mounted_data_vol" ]; then
+	error_exit "Mount reported success but /Volumes/$mounted_data_vol does not exist"
+fi
 
 # Detect volumes at startup, passing the mounted volume if found
+info "=== STARTING DETECTION PROCESS ==="
 volume_info=$(detect_volumes "$mounted_data_vol")
+if [ $? -ne 0 ]; then
+	exit 1
+fi
+
 system_volume=$(echo "$volume_info" | cut -d'|' -f1)
 data_volume=$(echo "$volume_info" | cut -d'|' -f2)
 
@@ -190,6 +338,7 @@ data_volume=$(echo "$volume_info" | cut -d'|' -f2)
 echo ""
 echo -e "${CYAN}╔═══════════════════════════════════════════════╗${NC}"
 echo -e "${CYAN}║  Bypass MDM By Assaf Dori (assafdori.com)   ║${NC}"
+echo -e "${CYAN}║  Version: ${VERSION}                                ║${NC}"
 echo -e "${CYAN}╚═══════════════════════════════════════════════╝${NC}"
 echo ""
 success "System Volume: $system_volume"
