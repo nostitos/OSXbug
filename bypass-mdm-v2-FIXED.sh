@@ -113,9 +113,17 @@ mount_data_volume() {
     disk_info=$(diskutil apfs list 2>&1 | grep -A 5 "$data_volume_id")
     debug "Volume info:\n$disk_info" >&2
     
-    # Check if locked
-    if diskutil apfs list | grep -A 10 "$data_volume_id" | grep -q "Locked.*Yes"; then
-        warn "Volume is encrypted and locked. FileVault password required." >&2
+    # Check if locked (look for FileVault: Yes or Locked: Yes)
+    local volume_status
+    volume_status=$(diskutil apfs list 2>&1 | grep -A 15 "Volume $data_volume_id" | head -20)
+    debug "Full volume status:\n$volume_status" >&2
+    
+    if echo "$volume_status" | grep -E "(FileVault.*Yes|Locked.*Yes)" > /dev/null; then
+        warn "╔════════════════════════════════════════════════════════╗" >&2
+        warn "║  FILEVAULT ENCRYPTED VOLUME DETECTED                   ║" >&2  
+        warn "║  The Data volume is encrypted and needs to be unlocked ║" >&2
+        warn "║  before we can create a user account.                  ║" >&2
+        warn "╚════════════════════════════════════════════════════════╝" >&2
         
         # Try to unlock with user password
         local unlock_success=0
@@ -124,11 +132,20 @@ mount_data_volume() {
         while [ $unlock_success -eq 0 ] && [ $unlock_attempts -lt 3 ]; do
             unlock_attempts=$((unlock_attempts + 1))
             
+            echo ""
+            echo -e "${CYAN}────────────────────────────────────────────────${NC}" >&2
             if [ $unlock_attempts -eq 1 ]; then
-                read -s -p "Enter FileVault password for this Mac: " filevault_pass
+                echo -e "${YEL}Please enter your FileVault password${NC}" >&2
+                echo -e "${YEL}(This is the password you use to unlock your Mac at startup)${NC}" >&2
+                echo ""
+                read -s -p "Password: " filevault_pass
             else
-                read -s -p "Password incorrect. Try again: " filevault_pass
+                echo -e "${RED}Password incorrect. Attempt $unlock_attempts of 3${NC}" >&2
+                echo ""
+                read -s -p "Try again: " filevault_pass
             fi
+            echo ""
+            echo -e "${CYAN}────────────────────────────────────────────────${NC}" >&2
             echo ""
             
             info "Attempting to unlock volume..." >&2
