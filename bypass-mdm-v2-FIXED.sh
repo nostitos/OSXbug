@@ -5,7 +5,7 @@
 # Fixed version that mounts the Data volume in Recovery Mode
 # Handles FileVault encrypted volumes
 
-VERSION="3.3"
+VERSION="3.4"
 
 # Define color codes
 RED='\033[1;31m'
@@ -29,12 +29,12 @@ warn() {
 
 # Success function
 success() {
-	echo -e "${GRN}✓ $1${NC}"
+	echo -e "${GRN}✓ $1${NC}" >&2
 }
 
 # Info function
 info() {
-	echo -e "${BLU}ℹ $1${NC}"
+	echo -e "${BLU}ℹ $1${NC}" >&2
 }
 
 # Debug function
