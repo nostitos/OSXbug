@@ -367,25 +367,22 @@ detect_volumes() {
 # Show initial debug info
 show_system_state
 
-# Mount data volume first and capture the result
+# Mount data volume first
 info "=== STARTING MOUNT PROCESS ==="
-mounted_data_vol=$(mount_data_volume)
+mount_data_volume
 mount_exit_code=$?
 
 if [ $mount_exit_code -ne 0 ]; then
 	error_exit "Mount process failed with exit code $mount_exit_code"
 fi
 
-if [ -z "$mounted_data_vol" ]; then
-	error_exit "Mount process returned empty result"
+# Check if Data volume was mounted
+if [ ! -d "/Volumes/Data" ]; then
+	error_exit "Mount reported success but /Volumes/Data does not exist"
 fi
 
-success "Mount process returned: '$mounted_data_vol'"
-
-# Verify mount worked
-if [ ! -d "/Volumes/$mounted_data_vol" ]; then
-	error_exit "Mount reported success but /Volumes/$mounted_data_vol does not exist"
-fi
+mounted_data_vol="Data"
+success "Mount process completed successfully"
 
 # Detect volumes at startup, passing the mounted volume if found
 info "=== STARTING DETECTION PROCESS ==="
