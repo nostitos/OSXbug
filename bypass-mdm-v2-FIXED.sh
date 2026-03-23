@@ -33,48 +33,55 @@ info() {
 	echo -e "${BLU}ℹ $1${NC}"
 }
 
-# Variable to store the mounted data volume name
-MOUNTED_DATA_VOL=""
-
 # Function to mount data volume if not already mounted
+# Returns the mounted volume name via echo for capture
 mount_data_volume() {
     info "Checking if data volume needs to be mounted..." >&2
     
     # Check if Data volume is already mounted
     if [ -d "/Volumes/Data" ]; then
-        info "Data volume already mounted" >&2
-        MOUNTED_DATA_VOL="Data"
+        info "Data volume already mounted at /Volumes/Data" >&2
+        echo "Data"
         return 0
     fi
     
     # Find the data volume identifier from diskutil
     local data_volume_id
     
-    # Strategy 1: Look for "Data" APFS volume that's not the system
-    data_volume_id=$(diskutil list | grep "APFS Volume" | grep -E "\sData\s" | awk '{print $NF}' | head -1)
+    # Strategy 1: Look for "Data" APFS volume
+    data_volume_id=$(diskutil list | grep "APFS Volume" | grep -E "Data" | grep "disk3" | awk '{print $NF}' | head -1)
     
-    # Strategy 2: If not found, look for volume with Data in name
     if [ -z "$data_volume_id" ]; then
-        data_volume_id=$(diskutil list | grep "APFS Volume" | grep "Data" | awk '{print $NF}' | head -1)
+        data_volume_id=$(diskutil list | grep "APFS Volume" | grep -E "Data" | awk '{print $NF}' | head -1)
     fi
     
     if [ -n "$data_volume_id" ]; then
         info "Found data volume identifier: $data_volume_id" >&2
         info "Mounting data volume..." >&2
         
-        if diskutil mount "$data_volume_id" >/dev/null 2>&1; then
+        # Try mounting with different methods
+        if diskutil mount "$data_volume_id" 2>&1 | grep -q "mounted"; then
             success "Data volume mounted successfully" >&2
-            MOUNTED_DATA_VOL="Data"
             sleep 1
+            echo "Data"
             return 0
-        else
-            warn "Standard mount failed, trying force mount..." >&2
-            if diskutil mountDisk "$data_volume_id" >/dev/null 2>&1; then
-                success "Data volume mounted with mountDisk" >&2
-                MOUNTED_DATA_VOL="Data"
-                sleep 1
-                return 0
-            fi
+        fi
+        
+        warn "Standard mount failed, trying mountDisk..." >&2
+        if diskutil mountDisk "$data_volume_id" 2>&1 | grep -q "mounted"; then
+            success "Data volume mounted with mountDisk" >&2
+            sleep 1
+            echo "Data"
+            return 0
+        fi
+        
+        # Last resort: try mounting with specific mount point
+        warn "Trying force mount..." >&2
+        if diskutil mount -mountPoint /Volumes/Data "$data_volume_id" 2>&1 | grep -q "mounted"; then
+            success "Data volume force mounted" >&2
+            sleep 1
+            echo "Data"
+            return 0
         fi
     fi
     
@@ -83,12 +90,21 @@ mount_data_volume() {
 }
 
 # Function to detect system volumes with multiple fallback strategies
+# Optional argument: $1 = pre-mounted data volume name
 detect_volumes() {
 	local system_vol=""
-	local data_vol=""
+	local data_vol="${1:-}"
 
 	info "Detecting system volumes..." >&2
-
+	
+	# Strategy 0: If data volume was already mounted and passed in, verify it
+	if [ -n "$data_vol" ] && [ -d "/Volumes/$data_vol/private/var/db/dslocal" ]; then
+		info "Using pre-mounted data volume: $data_vol" >&2
+		# Still need to find system volume
+	else
+		data_vol=""
+	fi
+	
 	# Strategy 1: Look for common macOS APFS volume patterns
 	for vol in /Volumes/*; do
 		if [ -d "$vol" ]; then
@@ -132,13 +148,7 @@ detect_volumes() {
 		done
 	fi
 	
-	# Strategy 4: Use the mounted data volume if we just mounted it
-	if [ -z "$data_vol" ] && [ -n "$MOUNTED_DATA_VOL" ] && [ -d "/Volumes/$MOUNTED_DATA_VOL" ]; then
-		data_vol="$MOUNTED_DATA_VOL"
-		info "Using mounted data volume: $data_vol" >&2
-	fi
-	
-	# Strategy 5: Look for any volume with dslocal directory (indicates data volume)
+	# Strategy 4: Look for any volume with dslocal directory (indicates data volume)
 	if [ -z "$data_vol" ]; then
 		for vol in /Volumes/*; do
 			if [ -d "$vol" ]; then
@@ -168,11 +178,11 @@ detect_volumes() {
 	echo "$system_vol|$data_vol"
 }
 
-# Mount data volume first
-mount_data_volume
+# Mount data volume first and capture the result
+mounted_data_vol=$(mount_data_volume)
 
-# Detect volumes at startup
-volume_info=$(detect_volumes)
+# Detect volumes at startup, passing the mounted volume if found
+volume_info=$(detect_volumes "$mounted_data_vol")
 system_volume=$(echo "$volume_info" | cut -d'|' -f1)
 data_volume=$(echo "$volume_info" | cut -d'|' -f2)
 
