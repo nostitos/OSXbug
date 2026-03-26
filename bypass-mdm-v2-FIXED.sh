@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # bypass-mdm-v2-FIXED.sh
-# Version: 3.3 - 2024-03-23
+# Version: 3.5 - 2024-03-23
 # Fixed version that mounts the Data volume in Recovery Mode
 # Handles FileVault encrypted volumes
 
